@@ -1,0 +1,21 @@
+# Déploiement Dokploy. Le volume nommé conserve la base SQLite entre les redéploiements.
+services:
+  coach:
+    build: .
+    restart: unless-stopped
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      MODEL: ${MODEL:-claude-sonnet-4-6}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      PUBLIC_URL: ${PUBLIC_URL}
+      DB_PATH: /data/coach.db
+      TICK_MINUTES: ${TICK_MINUTES:-15}
+      DEFAULT_TZ: ${DEFAULT_TZ:-Europe/Paris}
+    volumes:
+      - coach_data:/data
+    ports:
+      - "8000:8000"
+
+volumes:
+  coach_data:
