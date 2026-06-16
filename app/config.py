@@ -26,6 +26,9 @@ class Settings:
     # Délai après le créneau avant de relancer (minutes) et nb de messages d'historique chargés.
     checkin_grace_minutes: int
     history_limit: int
+    # Relances d'onboarding : silence minimal avant relance, et nb max de relances sans réponse.
+    onboarding_idle_hours: float
+    onboarding_max_nudges: int
 
     @property
     def webhook_path(self) -> str:
@@ -53,4 +56,6 @@ def get_settings() -> Settings:
         default_tz=_get("DEFAULT_TZ", "Europe/Paris"),
         checkin_grace_minutes=int(_get("CHECKIN_GRACE_MINUTES", "45")),
         history_limit=int(_get("HISTORY_LIMIT", "30")),
+        onboarding_idle_hours=float(_get("ONBOARDING_IDLE_HOURS", "20")),
+        onboarding_max_nudges=int(_get("ONBOARDING_MAX_NUDGES", "3")),
     )

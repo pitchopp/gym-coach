@@ -101,21 +101,58 @@ def due_checkins(
     return ready
 
 
+def should_nudge_onboarding(
+    user: sqlite3.Row,
+    last_msg_at: str | None,
+    now_local: datetime,
+    idle_hours: float,
+    max_nudges: int,
+) -> bool:
+    """Relancer l'onboarding seulement si : silence prolongé, pas trop de relances, hors heures calmes."""
+    if user["onboarding_nudges"] >= max_nudges:
+        return False
+    if in_quiet_hours(user["comm_prefs"], now_local.time()):
+        return False
+    if not last_msg_at:
+        return False
+    last = datetime.fromisoformat(last_msg_at).replace(tzinfo=UTC)
+    idle = (now_local - last).total_seconds() / 3600
+    return idle >= idle_hours
+
+
 async def run_tick(
     conn: sqlite3.Connection,
     grace_minutes: int,
     send_proactive: Callable[[sqlite3.Row, sqlite3.Row], Awaitable[None]],
+    send_onboarding_nudge: Callable[[sqlite3.Row], Awaitable[None]] | None = None,
     clock: Clock = _utcnow,
+    onboarding_idle_hours: float = 20,
+    onboarding_max_nudges: int = 3,
 ) -> int:
-    """Un passage du scheduler : pour chaque utilisateur actif, déclenche les relances dues.
+    """Un passage du scheduler : relances de séance (créneaux dus) + relances d'onboarding.
 
-    `send_proactive(user, checkin)` doit rédiger + envoyer le message puis marquer le check-in
-    'asked'. Renvoie le nombre de relances déclenchées.
+    `send_proactive(user, checkin)` rédige/envoie la relance de séance et marque le check-in 'asked'.
+    `send_onboarding_nudge(user)` rédige/envoie une relance d'onboarding et incrémente le compteur.
+    Renvoie le nombre de relances déclenchées.
     """
     triggered = 0
-    for user in repository.list_active_users(conn=conn):
+
+    # Relances de séance : tout utilisateur ayant au moins un créneau (indépendant de l'onboarding).
+    for user in repository.list_users_with_slots(conn=conn):
         now_local = local_now(user["timezone"], clock)
         for checkin in due_checkins(conn, user, now_local, grace_minutes):
             await send_proactive(user, checkin)
             triggered += 1
+
+    # Relances d'onboarding : utilisateurs qui ont commencé mais pas fini, sans spammer.
+    if send_onboarding_nudge is not None:
+        for user in repository.list_onboarding_users(conn=conn):
+            now_local = local_now(user["timezone"], clock)
+            last_msg = repository.last_message_at(user["id"], conn=conn)
+            if should_nudge_onboarding(
+                user, last_msg, now_local, onboarding_idle_hours, onboarding_max_nudges
+            ):
+                await send_onboarding_nudge(user)
+                triggered += 1
+
     return triggered

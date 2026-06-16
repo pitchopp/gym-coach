@@ -39,13 +39,45 @@ def get_user(user_id: int, *, conn: sqlite3.Connection | None = None) -> sqlite3
     return _conn(conn).execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
 
 
-def list_active_users(*, conn: sqlite3.Connection | None = None) -> list[sqlite3.Row]:
-    """Utilisateurs ayant terminé l'onboarding (candidats aux relances proactives)."""
+def list_users_with_slots(*, conn: sqlite3.Connection | None = None) -> list[sqlite3.Row]:
+    """Utilisateurs ayant au moins un créneau actif → candidats aux relances de séance."""
     return (
         _conn(conn)
-        .execute("SELECT * FROM users WHERE onboarding_done = 1")
+        .execute(
+            "SELECT DISTINCT u.* FROM users u "
+            "JOIN schedule_slots s ON s.user_id = u.id AND s.active = 1"
+        )
         .fetchall()
     )
+
+
+def list_onboarding_users(*, conn: sqlite3.Connection | None = None) -> list[sqlite3.Row]:
+    """Utilisateurs n'ayant pas terminé l'onboarding → candidats aux relances d'onboarding."""
+    return _conn(conn).execute("SELECT * FROM users WHERE onboarding_done = 0").fetchall()
+
+
+def last_message_at(user_id: int, *, conn: sqlite3.Connection | None = None) -> str | None:
+    """Horodatage UTC ('YYYY-MM-DD HH:MM:SS') du dernier message, ou None si aucun."""
+    row = (
+        _conn(conn)
+        .execute("SELECT MAX(created_at) AS ts FROM messages WHERE user_id = ?", (user_id,))
+        .fetchone()
+    )
+    return row["ts"] if row else None
+
+
+def increment_onboarding_nudge(user_id: int, *, conn: sqlite3.Connection | None = None) -> None:
+    c = _conn(conn)
+    c.execute("UPDATE users SET onboarding_nudges = onboarding_nudges + 1 WHERE id = ?", (user_id,))
+    c.commit()
+
+
+def reset_onboarding_nudges(user_id: int, *, conn: sqlite3.Connection | None = None) -> None:
+    c = _conn(conn)
+    c.execute(
+        "UPDATE users SET onboarding_nudges = 0 WHERE id = ? AND onboarding_nudges > 0", (user_id,)
+    )
+    c.commit()
 
 
 _USER_FIELDS = {"name", "timezone", "training_frequency", "onboarding_done"}

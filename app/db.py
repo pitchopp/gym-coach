@@ -42,6 +42,15 @@ def get_connection() -> sqlite3.Connection:
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Applique les migrations *.sql une seule fois, dans l'ordre, en mémorisant celles appliquées."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS schema_migrations ("
+        "filename TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')))"
+    )
+    applied = {row["filename"] for row in conn.execute("SELECT filename FROM schema_migrations")}
     for sql_file in sorted(_MIGRATIONS_DIR.glob("*.sql")):
+        if sql_file.name in applied:
+            continue
         conn.executescript(sql_file.read_text(encoding="utf-8"))
+        conn.execute("INSERT INTO schema_migrations (filename) VALUES (?)", (sql_file.name,))
     conn.commit()

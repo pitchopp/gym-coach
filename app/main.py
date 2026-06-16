@@ -22,7 +22,12 @@ async def _tick() -> None:
     settings = get_settings()
     try:
         n = await scheduler.run_tick(
-            get_connection(), settings.checkin_grace_minutes, coach.handle_proactive
+            get_connection(),
+            settings.checkin_grace_minutes,
+            coach.handle_proactive,
+            coach.handle_onboarding_nudge,
+            onboarding_idle_hours=settings.onboarding_idle_hours,
+            onboarding_max_nudges=settings.onboarding_max_nudges,
         )
         if n:
             logger.info("Tick : %d relance(s) déclenchée(s).", n)
