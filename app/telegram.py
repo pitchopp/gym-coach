@@ -26,6 +26,15 @@ async def send_message(chat_id: int, text: str) -> None:
             await client.post(_url("sendMessage"), json={"chat_id": chat_id, "text": text})
 
 
+async def send_chat_action(chat_id: int, action: str = "typing") -> None:
+    """Affiche l'indicateur « en train d'écrire… » côté Telegram (dure ~5 s)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(_url("sendChatAction"), json={"chat_id": chat_id, "action": action})
+    except httpx.HTTPError:
+        pass  # purement cosmétique : ne jamais bloquer le traitement pour ça
+
+
 async def set_webhook() -> dict[str, Any]:
     settings = get_settings()
     if not settings.public_url:

@@ -30,6 +30,7 @@ async def handle_incoming(chat_id: int, text: str) -> str:
     """Traite un message entrant : persiste, fait répondre le coach, envoie la réponse."""
     settings = get_settings()
     conn = get_connection()
+    await telegram.send_chat_action(chat_id, "typing")
     async with _locks[chat_id]:
         user = repository.get_or_create_user(chat_id, default_tz=settings.default_tz, conn=conn)
         repository.add_message(user["id"], "user", text, conn=conn)
@@ -37,7 +38,7 @@ async def handle_incoming(chat_id: int, text: str) -> str:
 
         reply = await asyncio.to_thread(agent.run_agent, conn, user, messages)
         if not reply:
-            reply = "…"
+            reply = "C'est noté 👍"
         repository.add_message(user["id"], "assistant", reply, conn=conn)
 
     await telegram.send_message(chat_id, reply)
@@ -58,6 +59,7 @@ async def handle_proactive(user: sqlite3.Row, checkin: sqlite3.Row) -> None:
             "pu faire sa séance. N'enregistre rien maintenant (attends sa réponse)."
         ),
     }
+    await telegram.send_chat_action(chat_id, "typing")
     async with _locks[chat_id]:
         fresh = repository.get_user(user["id"], conn=conn)
         messages = _history(conn, user["id"]) + [directive]

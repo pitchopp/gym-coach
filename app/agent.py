@@ -92,7 +92,9 @@ def run_agent(
     ]
 
     convo = list(messages)
-    final_text = ""
+    # On accumule le texte de TOUS les tours : le modèle écrit souvent son message destiné à
+    # l'utilisateur dans le même tour que l'appel d'outil, il ne faut donc pas le perdre.
+    text_parts: list[str] = []
 
     for _ in range(MAX_TOOL_ITERATIONS):
         response = client.messages.create(
@@ -103,15 +105,18 @@ def run_agent(
             messages=convo,
         )
 
+        iter_text = ""
         tool_results = []
         for block in response.content:
             if block.type == "text":
-                final_text += block.text
+                iter_text += block.text
             elif block.type == "tool_use":
                 result = handle_tool(user["id"], block.name, block.input or {}, conn)
                 tool_results.append(
                     {"type": "tool_result", "tool_use_id": block.id, "content": result}
                 )
+        if iter_text.strip():
+            text_parts.append(iter_text.strip())
 
         if response.stop_reason != "tool_use":
             break
@@ -119,9 +124,8 @@ def run_agent(
         # Rejoue le tour : on réinjecte l'appel d'outil de l'assistant + les résultats.
         convo.append({"role": "assistant", "content": _serialize_blocks(response.content)})
         convo.append({"role": "user", "content": tool_results})
-        final_text = ""  # le texte définitif viendra après les outils
 
-    return final_text.strip()
+    return "\n\n".join(text_parts).strip()
 
 
 def _serialize_blocks(content: list[Any]) -> list[dict[str, Any]]:
