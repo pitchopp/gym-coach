@@ -23,11 +23,18 @@ bienveillant, motivant et concret. Tu tutoies par défaut (sauf préférence con
 Ta mission :
 - Discuter, conseiller, répondre aux questions sur l'entraînement, la technique, la récupération.
 - Construire et ajuster un programme sur-mesure en discutant.
-- Apprendre et MÉMORISER durablement ce qui compte (fréquence, créneaux, préférences de
-  communication, objectifs, blessures...) via les outils. Dès qu'une info durable apparaît dans la
-  conversation, persiste-la avec l'outil adapté plutôt que de la garder seulement dans le fil.
 - Lors du premier échange, mène un court onboarding (fréquence, jours/horaires habituels, \
 préférences de comm, objectifs) puis appelle update_profile(onboarding_done=true).
+
+MÉMOIRE — règle importante : l'historique de conversation est tronqué avec le temps ; seuls l'état
+structuré et le résumé ci-dessous persistent. Donc dès qu'une information DURABLE apparaît, \
+persiste-la IMMÉDIATEMENT via l'outil adapté, avant de répondre. À persister systématiquement :
+- objectif(s) et niveau → remember_fact / update_profile
+- blessures, douleurs, contraintes médicales → remember_fact
+- jours/horaires d'entraînement (et tout changement) → set_schedule ; fréquence → update_profile
+- préférences (ton, matériel, exercices aimés/détestés, lieu, heures calmes) → remember_fact / update_profile
+- programme décidé → save_program
+Ne te fie jamais au fil de conversation pour retenir ces infos sur le long terme.
 
 Proactivité : tu relances l'utilisateur au bon moment pour savoir s'il a fait sa séance, mais tu ne \
 spammes jamais. Quand il répond à une relance, enregistre l'issue via log_session (done / skipped / \
@@ -59,6 +66,9 @@ def build_state_snapshot(conn: sqlite3.Connection, user: sqlite3.Row) -> str:
         or "aucune"
     )
 
+    summary = user["summary"] if "summary" in user.keys() else ""
+    summary_block = f"\nRésumé de la conversation jusqu'ici: {summary}" if summary else ""
+
     return (
         "\n\n=== État actuel de l'utilisateur ===\n"
         f"Nom: {user['name'] or 'inconnu'}\n"
@@ -69,7 +79,8 @@ def build_state_snapshot(conn: sqlite3.Connection, user: sqlite3.Row) -> str:
         f"Créneaux: {schedule}\n"
         f"Programme actif: {'oui' if program else 'non'}\n"
         f"Faits mémorisés: {facts_txt}\n"
-        f"Relances en attente de réponse: {open_txt}\n"
+        f"Relances en attente de réponse: {open_txt}"
+        f"{summary_block}\n"
         "Quand l'utilisateur répond à une relance sans préciser laquelle, vise la plus récente."
     )
 
@@ -85,13 +96,16 @@ def run_agent(
     """Exécute un tour complet (avec boucle d'outils) et renvoie le texte final."""
     client = client or _client()
     model = model or get_settings().model
-    # En OAuth, le 1er bloc system doit être l'identité Claude Code ; le persona vient ensuite.
+    # 3 blocs : identité Claude Code (requise OAuth) + persona, tous deux STATIQUES -> mis en cache
+    # (cache_control sur le persona => le préfixe outils+identité+persona est caché). Le snapshot,
+    # lui, change à chaque tour et reste hors cache.
     system = [
         {"type": "text", "text": auth.CLAUDE_CODE_IDENTITY},
-        {"type": "text", "text": _PERSONA + build_state_snapshot(conn, user)},
+        {"type": "text", "text": _PERSONA, "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": build_state_snapshot(conn, user)},
     ]
 
-    convo = list(messages)
+    convo = _normalize_messages(messages)
     # On accumule le texte de TOUS les tours : le modèle écrit souvent son message destiné à
     # l'utilisateur dans le même tour que l'appel d'outil, il ne faut donc pas le perdre.
     text_parts: list[str] = []
@@ -144,3 +158,58 @@ def _serialize_blocks(content: list[Any]) -> list[dict[str, Any]]:
                 }
             )
     return serialized
+
+
+def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Garantit un historique valide pour l'API : commence par 'user', rôles alternés.
+
+    Les relances proactives ajoutent des messages 'assistant' non précédés d'un 'user', ce qui peut
+    produire un historique qui commence par 'assistant' ou contient des rôles consécutifs (rejeté
+    par l'API). On retire les 'assistant' de tête et on fusionne les rôles consécutifs.
+    """
+    cleaned: list[dict[str, Any]] = []
+    for msg in messages:
+        if not cleaned and msg["role"] != "user":
+            continue  # on ne peut pas commencer par 'assistant'
+        if cleaned and cleaned[-1]["role"] == msg["role"]:
+            cleaned[-1]["content"] += "\n" + msg["content"]  # fusionne les rôles consécutifs
+        else:
+            cleaned.append({"role": msg["role"], "content": msg["content"]})
+    return cleaned
+
+
+def summarize_conversation(
+    old_summary: str,
+    messages: list[dict[str, Any]],
+    *,
+    client: Anthropic | None = None,
+    model: str | None = None,
+) -> str:
+    """Condense un résumé existant + de nouveaux messages en un résumé concis (texte, sans outils)."""
+    client = client or _client()
+    model = model or get_settings().model
+    transcript = "\n".join(
+        f"{'Utilisateur' if m['role'] == 'user' else 'Coach'}: {m['content']}" for m in messages
+    )
+    instruction = (
+        "Tu maintiens la mémoire de conversation d'un coach sportif. À partir du résumé existant et "
+        "des nouveaux échanges, produis un résumé MIS À JOUR, concis (8 lignes max), en français, "
+        "qui retient ce qui est utile au coaching sur la durée : objectifs, niveau, préférences, "
+        "blessures/contraintes, décisions de programme, événements marquants, ton de la relation. "
+        "N'invente rien, ne liste pas les créneaux (déjà stockés ailleurs)."
+    )
+    response = client.messages.create(
+        model=model,
+        max_tokens=600,
+        system=[
+            {"type": "text", "text": auth.CLAUDE_CODE_IDENTITY},
+            {"type": "text", "text": instruction},
+        ],
+        messages=[
+            {
+                "role": "user",
+                "content": f"Résumé existant:\n{old_summary or '(vide)'}\n\nNouveaux échanges:\n{transcript}",
+            }
+        ],
+    )
+    return "".join(b.text for b in response.content if b.type == "text").strip()

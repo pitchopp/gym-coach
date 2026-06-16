@@ -18,12 +18,42 @@ from app.db import get_connection
 _locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 
-def _history(conn: sqlite3.Connection, user_id: int) -> list[dict[str, str]]:
-    limit = get_settings().history_limit
+def _history(conn: sqlite3.Connection, user: sqlite3.Row) -> list[dict[str, str]]:
+    """Messages 'vivants' (non encore résumés) à envoyer verbatim. Le reste est dans le résumé.
+
+    Le cap protège contre une croissance non bornée si le résumé échoue ; en régime normal le
+    nombre de messages vivants reste sous ce plafond.
+    """
+    settings = get_settings()
+    through_id = user["summary_through_id"] if "summary_through_id" in user.keys() else 0
+    cap = settings.summary_trigger + settings.summary_keep_recent
     return [
         {"role": m["role"], "content": m["content"]}
-        for m in repository.recent_messages(user_id, limit, conn=conn)
+        for m in repository.live_messages(user["id"], through_id, cap, conn=conn)
     ]
+
+
+def _maybe_summarize(conn: sqlite3.Connection, user_id: int) -> None:
+    """Si trop de messages 'vivants', condense les PLUS ANCIENS dans le résumé glissant."""
+    settings = get_settings()
+    user = repository.get_user(user_id, conn=conn)
+    through_id = user["summary_through_id"]
+    n_live = repository.count_live_messages(user_id, through_id, conn=conn)
+    if n_live <= settings.summary_trigger:
+        return
+    to_fold = repository.oldest_live_messages(
+        user_id, through_id, n_live - settings.summary_keep_recent, conn=conn
+    )
+    if not to_fold:
+        return
+    new_through = to_fold[-1]["id"]
+    folded = [{"role": m["role"], "content": m["content"]} for m in to_fold]
+    try:
+        new_summary = agent.summarize_conversation(user["summary"], folded)
+    except Exception:
+        return  # maintenance best-effort : ne jamais casser le tour pour ça
+    if new_summary:
+        repository.update_summary(user_id, new_summary, new_through, conn=conn)
 
 
 async def handle_incoming(chat_id: int, text: str) -> str:
@@ -36,12 +66,13 @@ async def handle_incoming(chat_id: int, text: str) -> str:
         # L'utilisateur répond → on remet à zéro le compteur de relances d'onboarding.
         repository.reset_onboarding_nudges(user["id"], conn=conn)
         repository.add_message(user["id"], "user", text, conn=conn)
-        messages = _history(conn, user["id"])
+        messages = _history(conn, user)
 
         reply = await asyncio.to_thread(agent.run_agent, conn, user, messages)
         if not reply:
             reply = "C'est noté 👍"
         repository.add_message(user["id"], "assistant", reply, conn=conn)
+        await asyncio.to_thread(_maybe_summarize, conn, user["id"])
 
     await telegram.send_message(chat_id, reply)
     return reply
@@ -80,7 +111,7 @@ async def handle_proactive(user: sqlite3.Row, checkin: sqlite3.Row) -> None:
     await telegram.send_chat_action(chat_id, "typing")
     async with _locks[chat_id]:
         fresh = repository.get_user(user["id"], conn=conn)
-        messages = _history(conn, user["id"]) + [directive]
+        messages = _history(conn, fresh) + [directive]
         text = await asyncio.to_thread(agent.run_agent, conn, fresh, messages)
         if not text:
             text = f"Salut ! Tu as réussi à caser {activity} ?"
@@ -107,7 +138,7 @@ async def handle_onboarding_nudge(user: sqlite3.Row) -> None:
     await telegram.send_chat_action(chat_id, "typing")
     async with _locks[chat_id]:
         fresh = repository.get_user(user["id"], conn=conn)
-        messages = _history(conn, user["id"]) + [directive]
+        messages = _history(conn, fresh) + [directive]
         text = await asyncio.to_thread(agent.run_agent, conn, fresh, messages)
         if not text:
             text = "Hey ! On reprend quand tu veux pour finir de caler ton programme 💪"

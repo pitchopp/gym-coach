@@ -280,18 +280,58 @@ def add_message(
     c.commit()
 
 
-def recent_messages(
-    user_id: int, limit: int = 30, *, conn: sqlite3.Connection | None = None
+def live_messages(
+    user_id: int, after_id: int, limit: int, *, conn: sqlite3.Connection | None = None
 ) -> list[sqlite3.Row]:
+    """Messages non encore résumés (id > after_id), des plus récents (cap `limit`), ordre chronologique."""
     rows = (
         _conn(conn)
         .execute(
-            "SELECT role, content FROM messages WHERE user_id = ? ORDER BY id DESC LIMIT ?",
-            (user_id, limit),
+            "SELECT id, role, content FROM messages WHERE user_id = ? AND id > ? "
+            "ORDER BY id DESC LIMIT ?",
+            (user_id, after_id, limit),
         )
         .fetchall()
     )
     return list(reversed(rows))
+
+
+def count_live_messages(
+    user_id: int, after_id: int, *, conn: sqlite3.Connection | None = None
+) -> int:
+    return (
+        _conn(conn)
+        .execute(
+            "SELECT COUNT(*) AS n FROM messages WHERE user_id = ? AND id > ?", (user_id, after_id)
+        )
+        .fetchone()["n"]
+    )
+
+
+def oldest_live_messages(
+    user_id: int, after_id: int, limit: int, *, conn: sqlite3.Connection | None = None
+) -> list[sqlite3.Row]:
+    """Les plus ANCIENS messages non résumés (id > after_id), ordre chronologique — pour le résumé."""
+    return (
+        _conn(conn)
+        .execute(
+            "SELECT id, role, content FROM messages WHERE user_id = ? AND id > ? "
+            "ORDER BY id ASC LIMIT ?",
+            (user_id, after_id, limit),
+        )
+        .fetchall()
+    )
+
+
+def update_summary(
+    user_id: int, summary: str, through_id: int, *, conn: sqlite3.Connection | None = None
+) -> None:
+    c = _conn(conn)
+    c.execute(
+        "UPDATE users SET summary = ?, summary_through_id = ? WHERE id = ?",
+        (summary, through_id, user_id),
+    )
+    c.commit()
 
 
 # ---------------------------------------------------------------------------- facts
