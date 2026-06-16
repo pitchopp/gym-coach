@@ -65,10 +65,16 @@ async def webhook(secret: str, request: Request) -> dict[str, bool]:
     parsed = telegram.parse_update(update)
     if parsed is None:
         return {"ok": True}
-    if parsed.text:
-        await coach.handle_incoming(parsed.chat_id, parsed.text)
-    elif parsed.voice_file_id:
-        await coach.handle_voice(parsed.chat_id, parsed.voice_file_id)
+    # On acquitte toujours (200) : un non-2xx ferait re-livrer le même update par Telegram en
+    # boucle. Les erreurs sont loguées et l'utilisateur est prévenu plutôt que laissé sans réponse.
+    try:
+        if parsed.text:
+            await coach.handle_incoming(parsed.chat_id, parsed.text)
+        elif parsed.voice_file_id:
+            await coach.handle_voice(parsed.chat_id, parsed.voice_file_id)
+    except Exception:
+        logger.exception("Échec du traitement de l'update (chat_id=%s)", parsed.chat_id)
+        await coach.notify_failure(parsed.chat_id)
     return {"ok": True}
 
 

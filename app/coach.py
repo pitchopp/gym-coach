@@ -8,6 +8,7 @@ dans un thread pour ne pas bloquer la boucle asyncio.
 from __future__ import annotations
 
 import asyncio
+import logging
 import sqlite3
 from collections import defaultdict
 
@@ -15,7 +16,24 @@ from app import agent, repository, telegram, transcribe
 from app.config import get_settings
 from app.db import get_connection
 
+logger = logging.getLogger("gym-coach")
+
 _locks: dict[int, asyncio.Lock] = defaultdict(asyncio.Lock)
+
+# Message de repli quand le coach ne peut pas répondre (panne API, rate-limit, bug). Mieux
+# vaut un mot honnête et une invitation à réessayer qu'un silence (l'utilisateur attend).
+SERVER_ERROR_REPLY = (
+    "Oups, j'ai un petit souci technique de mon côté 😅 "
+    "Renvoie-moi ton message dans un instant, ça devrait repartir."
+)
+
+
+async def notify_failure(chat_id: int) -> None:
+    """Prévient l'utilisateur d'un incident, sans jamais lever (best-effort)."""
+    try:
+        await telegram.send_message(chat_id, SERVER_ERROR_REPLY)
+    except Exception:
+        logger.exception("Impossible d'envoyer le message de repli à chat_id=%s", chat_id)
 
 
 def _history(conn: sqlite3.Connection, user: sqlite3.Row) -> list[dict[str, str]]:
@@ -68,7 +86,13 @@ async def handle_incoming(chat_id: int, text: str) -> str:
         repository.add_message(user["id"], "user", text, conn=conn)
         messages = _history(conn, user)
 
-        reply = await asyncio.to_thread(agent.run_agent, conn, user, messages)
+        try:
+            reply = await asyncio.to_thread(agent.run_agent, conn, user, messages)
+        except Exception:
+            # Le message de l'utilisateur reste en base : il pourra simplement le renvoyer.
+            logger.exception("run_agent a échoué pour chat_id=%s", chat_id)
+            await notify_failure(chat_id)
+            return SERVER_ERROR_REPLY
         if not reply:
             reply = "C'est noté 👍"
         repository.add_message(user["id"], "assistant", reply, conn=conn)
