@@ -11,7 +11,7 @@ import asyncio
 import sqlite3
 from collections import defaultdict
 
-from app import agent, repository, telegram
+from app import agent, repository, telegram, transcribe
 from app.config import get_settings
 from app.db import get_connection
 
@@ -45,6 +45,22 @@ async def handle_incoming(chat_id: int, text: str) -> str:
 
     await telegram.send_message(chat_id, reply)
     return reply
+
+
+async def handle_voice(chat_id: int, file_id: str) -> None:
+    """Télécharge un vocal, le transcrit, puis le traite comme un message texte normal."""
+    await telegram.send_chat_action(chat_id, "typing")
+    audio = await telegram.download_file(file_id)
+    if not audio:
+        await telegram.send_message(chat_id, "Je n'ai pas réussi à récupérer ton vocal 😕")
+        return
+    text = await asyncio.to_thread(transcribe.transcribe, audio)
+    if not text:
+        await telegram.send_message(
+            chat_id, "Je n'ai rien compris à ton vocal, tu peux réessayer ou m'écrire ?"
+        )
+        return
+    await handle_incoming(chat_id, text)
 
 
 async def handle_proactive(user: sqlite3.Row, checkin: sqlite3.Row) -> None:

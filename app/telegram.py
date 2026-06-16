@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 
 from app.config import get_settings
+
+
+@dataclass
+class IncomingMessage:
+    """Message entrant normalisé : soit du texte, soit un vocal (file_id à transcrire)."""
+
+    chat_id: int
+    text: str | None = None
+    voice_file_id: str | None = None
 
 _API_BASE = "https://api.telegram.org/bot{token}/{method}"
 
@@ -45,13 +55,34 @@ async def set_webhook() -> dict[str, Any]:
         return resp.json()
 
 
-def parse_update(update: dict[str, Any]) -> tuple[int, str] | None:
-    """Extrait (chat_id, texte) d'un update Telegram. None si pas un message texte exploitable."""
+def parse_update(update: dict[str, Any]) -> IncomingMessage | None:
+    """Extrait un message texte OU vocal d'un update Telegram. None si rien d'exploitable."""
     message = update.get("message") or update.get("edited_message")
     if not message:
         return None
-    text = message.get("text")
     chat = message.get("chat", {})
-    if not text or "id" not in chat:
+    if "id" not in chat:
         return None
-    return int(chat["id"]), text
+    chat_id = int(chat["id"])
+
+    if message.get("text"):
+        return IncomingMessage(chat_id=chat_id, text=message["text"])
+    # Note vocale (voice) ou fichier audio (audio).
+    media = message.get("voice") or message.get("audio")
+    if media and media.get("file_id"):
+        return IncomingMessage(chat_id=chat_id, voice_file_id=media["file_id"])
+    return None
+
+
+async def download_file(file_id: str) -> bytes | None:
+    """Récupère le contenu binaire d'un fichier Telegram à partir de son file_id."""
+    token = get_settings().telegram_bot_token
+    async with httpx.AsyncClient(timeout=30) as client:
+        info = await client.post(_url("getFile"), json={"file_id": file_id})
+        if info.status_code >= 400:
+            return None
+        file_path = info.json().get("result", {}).get("file_path")
+        if not file_path:
+            return None
+        resp = await client.get(f"https://api.telegram.org/file/bot{token}/{file_path}")
+        return resp.content if resp.status_code < 400 else None

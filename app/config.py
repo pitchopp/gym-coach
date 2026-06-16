@@ -29,6 +29,10 @@ class Settings:
     # Relances d'onboarding : silence minimal avant relance, et nb max de relances sans réponse.
     onboarding_idle_hours: float
     onboarding_max_nudges: int
+    # Transcription audio (faster-whisper, local).
+    whisper_model: str
+    whisper_cache_dir: str
+    whisper_language: str
 
     @property
     def webhook_path(self) -> str:
@@ -58,4 +62,7 @@ def get_settings() -> Settings:
         history_limit=int(_get("HISTORY_LIMIT", "30")),
         onboarding_idle_hours=float(_get("ONBOARDING_IDLE_HOURS", "20")),
         onboarding_max_nudges=int(_get("ONBOARDING_MAX_NUDGES", "3")),
+        whisper_model=_get("WHISPER_MODEL", "base"),
+        whisper_cache_dir=_get("WHISPER_CACHE_DIR", "/data/whisper-models"),
+        whisper_language=_get("WHISPER_LANGUAGE", "fr"),
     )

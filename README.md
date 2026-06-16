@@ -7,6 +7,9 @@ chaque utilisateur (fréquence, créneaux, préférences, programme, faits perso
 moment sans spammer** : une seule relance par séance attendue, report automatique si l'utilisateur
 dit « j'irai demain ».
 
+Il accepte aussi les **messages vocaux** : transcription locale via faster-whisper (sans clé API),
+puis traités comme du texte.
+
 ## Stack
 
 - Python 3.14, géré par [uv](https://docs.astral.sh/uv/)

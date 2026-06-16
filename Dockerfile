@@ -1,6 +1,10 @@
 # syntax=docker/dockerfile:1
 FROM python:3.14-slim
 
+# libgomp1 : requis par ctranslate2 (faster-whisper) pour la transcription audio.
+RUN apt-get update && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
 # uv pour installer les dépendances depuis le lockfile.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 

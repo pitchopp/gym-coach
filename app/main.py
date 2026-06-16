@@ -65,8 +65,10 @@ async def webhook(secret: str, request: Request) -> dict[str, bool]:
     parsed = telegram.parse_update(update)
     if parsed is None:
         return {"ok": True}
-    chat_id, text = parsed
-    await coach.handle_incoming(chat_id, text)
+    if parsed.text:
+        await coach.handle_incoming(parsed.chat_id, parsed.text)
+    elif parsed.voice_file_id:
+        await coach.handle_voice(parsed.chat_id, parsed.voice_file_id)
     return {"ok": True}
 
 
