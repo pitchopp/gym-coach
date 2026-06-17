@@ -13,7 +13,8 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
-    # Auth Claude par OAuth (abonnement) : pas de clé API. Voir app/auth.py.
+    # Auth Claude : si `anthropic_api_key` est défini, on l'utilise (clé API dédiée, limites isolées) ;
+    # sinon on retombe sur l'OAuth d'abonnement (oauth_creds_path / seed). Voir app/auth.py.
     oauth_creds_path: str
     oauth_seed_json: str
     model: str
@@ -35,6 +36,8 @@ class Settings:
     whisper_model: str
     whisper_cache_dir: str
     whisper_language: str
+    # Clé API Claude (optionnelle). Si présente, prioritaire sur l'OAuth.
+    anthropic_api_key: str = ""
 
     @property
     def webhook_path(self) -> str:
@@ -68,4 +71,5 @@ def get_settings() -> Settings:
         whisper_model=_get("WHISPER_MODEL", "base"),
         whisper_cache_dir=_get("WHISPER_CACHE_DIR", "/data/whisper-models"),
         whisper_language=_get("WHISPER_LANGUAGE", "fr"),
+        anthropic_api_key=_get("ANTHROPIC_API_KEY", ""),
     )

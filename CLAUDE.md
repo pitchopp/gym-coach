@@ -54,8 +54,9 @@ Modules (`app/`), du plus central au périphérique :
   respect du délai de grâce et des heures calmes.
 - **`repository.py`** — CRUD SQLite. Toutes les fonctions acceptent une `conn` explicite (tests) ou
   retombent sur la connexion globale.
-- **`auth.py`** — authentification Claude par **OAuth d'abonnement** (pas de clé API), avec refresh
-  automatique et cooldown anti-429. Voir section dédiée.
+- **`auth.py`** — authentification Claude. Si `ANTHROPIC_API_KEY` est défini → **clé API dédiée**
+  (`build_client` renvoie `Anthropic(api_key=...)`, pas d'OAuth) ; sinon → **OAuth d'abonnement** avec
+  refresh automatique et cooldown anti-429. `using_api_key()` indique le mode. Voir section dédiée.
 - **`telegram.py`** — client API Bot (envoi, webhook, download de fichiers), `parse_update`.
 - **`transcribe.py`** — faster-whisper local (CPU, int8), modèle chargé paresseusement, inférence
   sérialisée par verrou.
@@ -80,19 +81,26 @@ crée un nouveau check-in à la date cible.
 3. **Messages vivants** — les messages d'id > `summary_through_id` envoyés verbatim (cap
    `summary_trigger + summary_keep_recent`).
 
-## Auth OAuth (contraintes critiques)
+## Auth (deux modes)
 
-L'app s'authentifie via les credentials OAuth de l'abonnement, **pas** une clé API. Deux contraintes
-non négociables pour que l'API accepte la requête :
+**Mode clé API (prod actuelle, recommandé)** : si `ANTHROPIC_API_KEY` est défini, `build_client` renvoie
+`Anthropic(api_key=...)`. Aucun refresh, aucune rotation, limites isolées de l'usage Claude Code perso —
+c'est le mode qui évite les `429` sur `/oauth/token`. Dans ce mode, **ni** l'en-tête beta **ni** le bloc
+d'identité « Claude Code » ne sont envoyés (`run_agent`/`summarize_conversation` les omettent via
+`auth.using_api_key()`).
+
+**Mode OAuth d'abonnement (repli)** : utilisé si `ANTHROPIC_API_KEY` est absent. Deux contraintes non
+négociables pour que l'API accepte la requête :
 - en-tête `anthropic-beta: oauth-2025-04-20` (posé par `auth.build_client`) ;
 - le **1er bloc system DOIT être** exactement `CLAUDE_CODE_IDENTITY` (« You are Claude Code... »).
-  Toute requête Messages API (y compris `summarize_conversation`) doit conserver ce 1er bloc.
 
-Le token d'accès (~8 h) est rafraîchi automatiquement et persisté sur `/data` (le refresh token
-tourne à chaque rafraîchissement). Un cooldown après échec évite la rafale de 429. Pour rétablir le
-bot quand l'auth casse, voir la mémoire projet (« Récupération token OAuth »).
+Le token d'accès (~8 h) est rafraîchi automatiquement et persisté sur `/data` (le refresh token tourne à
+chaque rafraîchissement). Un cooldown après échec évite la rafale de 429. ⚠️ Les rate limits du refresh
+OAuth sont **partagés** avec l'usage Claude Code perso → c'était la cause racine des pannes `429`, d'où la
+bascule en clé API. Pour rétablir l'OAuth si besoin, voir la mémoire projet (« Récupération token OAuth »).
 
-**Déploiement (Dokploy)** : il n'y a **pas** de `ANTHROPIC_API_KEY`. Fournir `CLAUDE_OAUTH_JSON`
+**Déploiement (Dokploy)** : la prod utilise `ANTHROPIC_API_KEY` (clé API dédiée). En repli OAuth, fournir
+`CLAUDE_OAUTH_JSON`
 (contenu JSON du Keychain « Claude Code-credentials ») comme variable d'environnement — il sert au
 **seed initial** des creds si le fichier `OAUTH_CREDS_PATH` (`/data/claude_oauth.json`) est absent.
 Le fichier vivant sur le volume `/data` faisant foi ensuite, `CLAUDE_OAUTH_JSON` n'est relu qu'au

@@ -113,14 +113,13 @@ def run_agent(
     """Exécute un tour complet (avec boucle d'outils) et renvoie le texte final + choix éventuels."""
     client = client or _client()
     model = model or get_settings().model
-    # 3 blocs : identité Claude Code (requise OAuth) + persona, tous deux STATIQUES -> mis en cache
-    # (cache_control sur le persona => le préfixe outils+identité+persona est caché). Le snapshot,
-    # lui, change à chaque tour et reste hors cache.
-    system = [
-        {"type": "text", "text": auth.CLAUDE_CODE_IDENTITY},
-        {"type": "text", "text": _PERSONA, "cache_control": {"type": "ephemeral"}},
-        {"type": "text", "text": build_state_snapshot(conn, user)},
-    ]
+    # Persona STATIQUE -> mis en cache (cache_control). Le snapshot change à chaque tour, hors cache.
+    # L'identité « Claude Code » n'est requise QUE pour l'auth OAuth ; en mode clé API on l'omet.
+    system = []
+    if not auth.using_api_key():
+        system.append({"type": "text", "text": auth.CLAUDE_CODE_IDENTITY})
+    system.append({"type": "text", "text": _PERSONA, "cache_control": {"type": "ephemeral"}})
+    system.append({"type": "text", "text": build_state_snapshot(conn, user)})
 
     convo = _normalize_messages(messages)
     # On accumule le texte de TOUS les tours : le modèle écrit souvent son message destiné à
@@ -222,13 +221,14 @@ def summarize_conversation(
         "blessures/contraintes, décisions de programme, événements marquants, ton de la relation. "
         "N'invente rien, ne liste pas les créneaux (déjà stockés ailleurs)."
     )
+    sys_blocks = []
+    if not auth.using_api_key():
+        sys_blocks.append({"type": "text", "text": auth.CLAUDE_CODE_IDENTITY})
+    sys_blocks.append({"type": "text", "text": instruction})
     response = client.messages.create(
         model=model,
         max_tokens=600,
-        system=[
-            {"type": "text", "text": auth.CLAUDE_CODE_IDENTITY},
-            {"type": "text", "text": instruction},
-        ],
+        system=sys_blocks,
         messages=[
             {
                 "role": "user",

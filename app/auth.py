@@ -146,7 +146,20 @@ def get_access_token() -> str:
         return creds["accessToken"]
 
 
+def using_api_key() -> bool:
+    """True si une clé API dédiée est configurée (prioritaire sur l'OAuth d'abonnement)."""
+    return bool(get_settings().anthropic_api_key)
+
+
 def build_client() -> Anthropic:
+    """Client Anthropic. Clé API si fournie (pas de refresh OAuth, limites isolées) ; sinon OAuth.
+
+    En mode clé API, on n'envoie NI l'en-tête beta OAuth NI le bloc d'identité « Claude Code »
+    (tous deux spécifiques à l'auth par abonnement — cf. run_agent qui omet l'identité dans ce cas).
+    """
+    api_key = get_settings().anthropic_api_key
+    if api_key:
+        return Anthropic(api_key=api_key)
     return Anthropic(
         auth_token=get_access_token(),
         default_headers={"anthropic-beta": OAUTH_BETA},
