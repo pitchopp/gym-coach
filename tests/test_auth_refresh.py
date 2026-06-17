@@ -51,7 +51,11 @@ def test_refresh_failure_pose_un_cooldown_et_ne_re_tente_pas(monkeypatch):
 
 def test_retry_after_allonge_le_cooldown(monkeypatch):
     monkeypatch.setattr(auth, "load_creds", _expired_creds)
-    monkeypatch.setattr(auth, "_refresh", lambda c: (_ for _ in ()).throw(_http_error(429, {"retry-after": "600"})))
+
+    def _raise_429(_creds):
+        raise _http_error(429, {"retry-after": "600"})
+
+    monkeypatch.setattr(auth, "_refresh", _raise_429)
 
     with pytest.raises(httpx.HTTPStatusError):
         auth.get_access_token()

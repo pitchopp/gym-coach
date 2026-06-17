@@ -4,7 +4,10 @@ services:
     build: .
     restart: unless-stopped
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      # Auth Claude par OAuth abonnement (pas de clé API). Le fichier de creds est persisté
+      # sur le volume ; CLAUDE_OAUTH_JSON ne sert qu'au seed initial (si le fichier est absent).
+      OAUTH_CREDS_PATH: ${OAUTH_CREDS_PATH:-/data/claude_oauth.json}
+      CLAUDE_OAUTH_JSON: ${CLAUDE_OAUTH_JSON}
       MODEL: ${MODEL:-claude-sonnet-4-6}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET}
