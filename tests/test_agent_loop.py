@@ -142,3 +142,75 @@ def test_run_agent_captures_suggest_replies(conn):
         for m in second
         if isinstance(m["content"], list)
     )
+
+
+def test_run_agent_escalade_vers_modele_fort(conn):
+    from app.config import get_settings
+
+    user = repository.get_or_create_user(10, conn=conn)
+    user = repository.get_user(user["id"], conn=conn)
+    client = _FakeClient(
+        [
+            # Passe rapide : le modèle réclame l'escalade.
+            _Response(
+                content=[_ToolUse(id="e1", name="escalate_to_sonnet", input={"reason": "programme"})],
+                stop_reason="tool_use",
+            ),
+            # Passe forte : réponse finale.
+            _Response(content=[_Text("Voici ton programme full-body 💪")], stop_reason="end_turn"),
+        ]
+    )
+
+    # model=None -> chemin de routage (rapide puis escalade).
+    reply = agent.run_agent(conn, user, [{"role": "user", "content": "fais-moi un programme"}], client=client)
+
+    s = get_settings()
+    assert reply.text == "Voici ton programme full-body 💪"
+    assert len(client.messages.calls) == 2
+    assert client.messages.calls[0]["model"] == s.model_fast  # passe rapide = Haiku
+    assert client.messages.calls[1]["model"] == s.model  # escalade = modèle fort
+    names_fast = {t["name"] for t in client.messages.calls[0]["tools"]}
+    names_strong = {t["name"] for t in client.messages.calls[1]["tools"]}
+    assert "escalate_to_sonnet" in names_fast  # outil proposé sur la passe rapide
+    assert "escalate_to_sonnet" not in names_strong  # mais pas sur la passe forte
+
+
+def test_run_agent_sans_escalade_reste_sur_haiku(conn):
+    from app.config import get_settings
+
+    user = repository.get_or_create_user(11, conn=conn)
+    user = repository.get_user(user["id"], conn=conn)
+    client = _FakeClient(
+        [_Response(content=[_Text("Bien reçu, bravo 👍")], stop_reason="end_turn")]
+    )
+
+    reply = agent.run_agent(conn, user, [{"role": "user", "content": "c'est fait !"}], client=client)
+
+    assert reply.text == "Bien reçu, bravo 👍"
+    assert len(client.messages.calls) == 1  # une seule passe
+    assert client.messages.calls[0]["model"] == get_settings().model_fast
+
+
+def test_escalade_ignore_les_autres_outils_de_la_meme_reponse(conn):
+    user = repository.get_or_create_user(12, conn=conn)
+    user = repository.get_user(user["id"], conn=conn)
+    client = _FakeClient(
+        [
+            # La passe rapide met update_profile ET escalate dans la même réponse : la mutation ne
+            # doit PAS être exécutée (on abandonne la passe avant tout outil).
+            _Response(
+                content=[
+                    _ToolUse(id="u1", name="update_profile", input={"training_frequency": "5x"}),
+                    _ToolUse(id="e1", name="escalate_to_sonnet", input={}),
+                ],
+                stop_reason="tool_use",
+            ),
+            _Response(content=[_Text("ok")], stop_reason="end_turn"),
+        ]
+    )
+
+    agent.run_agent(conn, user, [{"role": "user", "content": "x"}], client=client)
+
+    refreshed = repository.get_user(user["id"], conn=conn)
+    assert refreshed["training_frequency"] != "5x"  # update_profile non exécuté
+    assert len(client.messages.calls) == 2  # escalade bien déclenchée

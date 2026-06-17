@@ -34,12 +34,15 @@ parallèle via APScheduler (`main._tick` toutes les `TICK_MINUTES`).
 
 Modules (`app/`), du plus central au périphérique :
 
-- **`agent.py`** — boucle conversationnelle Claude. `run_agent` assemble le `system` en 3 blocs
-  (identité Claude Code requise pour OAuth + persona en cache + snapshot d'état non caché via
-  `build_state_snapshot`), exécute les `tool_use` en boucle jusqu'à `end_turn`
-  (`MAX_TOOL_ITERATIONS=8`), accumule le texte de **tous** les tours. La boucle Claude est
-  **synchrone** ; les appelants la lancent dans un thread (`asyncio.to_thread`). `summarize_conversation`
-  produit le résumé glissant.
+- **`agent.py`** — boucle conversationnelle Claude. `run_agent` assemble le `system` (identité Claude
+  Code en mode OAuth seulement + persona en cache + snapshot d'état non caché via `build_state_snapshot`,
+  qui inclut date/heure courantes), puis route : passe sur `model_fast` (Haiku) avec l'outil
+  `escalate_to_sonnet` ; si le modèle l'appelle, `_run_pass` est rejoué sur `model` (Sonnet) sans cet
+  outil, depuis les messages d'origine. Un `model` explicite force une passe unique (tests). `_run_pass`
+  exécute les `tool_use` jusqu'à `end_turn` (`MAX_TOOL_ITERATIONS=8`) et accumule le texte de **tous** les
+  tours ; il abandonne la passe AVANT d'exécuter le moindre outil si `escalate_to_sonnet` apparaît (pas de
+  mutation). La boucle Claude est **synchrone** ; les appelants la lancent dans un thread
+  (`asyncio.to_thread`). `summarize_conversation` (sur `model`, le modèle fort) produit le résumé glissant.
 - **`tools.py`** — outils (function calling) exposés à Claude : `update_profile`, `set_schedule`,
   `log_session`, `save_program`/`get_program`, `remember_fact`/`recall_facts`. Chaque handler mute la
   base et renvoie une courte chaîne de confirmation (tool_result). **C'est par ces outils que le coach

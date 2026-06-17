@@ -38,6 +38,8 @@ class Settings:
     whisper_language: str
     # Clé API Claude (optionnelle). Si présente, prioritaire sur l'OAuth.
     anthropic_api_key: str = ""
+    # Modèle rapide utilisé par défaut ; `model` sert alors de cible d'escalade (raisonnement).
+    model_fast: str = "claude-haiku-4-5-20251001"
 
     @property
     def webhook_path(self) -> str:
@@ -72,4 +74,5 @@ def get_settings() -> Settings:
         whisper_cache_dir=_get("WHISPER_CACHE_DIR", "/data/whisper-models"),
         whisper_language=_get("WHISPER_LANGUAGE", "fr"),
         anthropic_api_key=_get("ANTHROPIC_API_KEY", ""),
+        model_fast=_get("MODEL_FAST", "claude-haiku-4-5-20251001"),
     )

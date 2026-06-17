@@ -16,7 +16,7 @@ from anthropic import Anthropic
 
 from app import auth, repository
 from app.config import get_settings
-from app.tools import TOOLS, handle_tool
+from app.tools import ESCALATE_TOOL, TOOLS, handle_tool
 
 MAX_TOOL_ITERATIONS = 8
 
@@ -61,7 +61,11 @@ par une ligne contenant uniquement [[NEXT]] (réservé aux courtes bulles de cha
 pour une question ouverte ni pour afficher un programme.
 - Pas de listes interminables sauf pour un programme.
 - Tu connais déjà la date et l'heure (champ « Maintenant » de l'état ci-dessous, dans le fuseau de \
-l'utilisateur) : ne demande JAMAIS quel jour ou quelle heure il est, déduis-le toi-même."""
+l'utilisateur) : ne demande JAMAIS quel jour ou quelle heure il est, déduis-le toi-même.
+- Tu démarres sur un modèle rapide. Si la demande exige un vrai raisonnement (concevoir/ajuster un \
+programme, expliquer une technique en profondeur, planifier, arbitrer un cas complexe), appelle \
+escalate_to_sonnet EN PREMIER (avant tout texte ou autre outil), quand l'outil est disponible. Pour les \
+messages simples (accusé de réception, log de séance, petite question), réponds directement sans escalader."""
 
 
 def _client() -> Anthropic:
@@ -134,9 +138,15 @@ def run_agent(
     client: Anthropic | None = None,
     model: str | None = None,
 ) -> AgentReply:
-    """Exécute un tour complet (avec boucle d'outils) et renvoie le texte final + choix éventuels."""
+    """Exécute un tour complet et renvoie le texte final + choix éventuels.
+
+    Routage : par défaut (model non fourni) on démarre sur le modèle rapide (`model_fast`) avec l'outil
+    d'escalade ; si le modèle réclame `escalate_to_sonnet`, on rejoue le tour sur le modèle fort
+    (`model`) sans cet outil, depuis les messages d'origine. Un `model` explicite (tests) force une
+    passe unique sans escalade.
+    """
     client = client or _client()
-    model = model or get_settings().model
+    settings = get_settings()
     # Persona STATIQUE -> mis en cache (cache_control). Le snapshot change à chaque tour, hors cache.
     # L'identité « Claude Code » n'est requise QUE pour l'auth OAuth ; en mode clé API on l'omet.
     system = []
@@ -145,6 +155,37 @@ def run_agent(
     system.append({"type": "text", "text": _PERSONA, "cache_control": {"type": "ephemeral"}})
     system.append({"type": "text", "text": build_state_snapshot(conn, user)})
 
+    if model is not None:  # passe unique imposée (tests / appel explicite)
+        text, quick, _ = _run_pass(client, system, messages, model, TOOLS, user["id"], conn)
+        return AgentReply(text, quick)
+
+    # Passe rapide avec possibilité d'escalade.
+    text, quick, escalated = _run_pass(
+        client, system, messages, settings.model_fast, [*TOOLS, ESCALATE_TOOL], user["id"], conn
+    )
+    if escalated:
+        # Modèle fort, sans l'outil d'escalade, rejoué depuis les messages d'origine.
+        text, quick, _ = _run_pass(
+            client, system, messages, settings.model, TOOLS, user["id"], conn
+        )
+    return AgentReply(text, quick)
+
+
+def _run_pass(
+    client: Anthropic,
+    system: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+    model: str,
+    tools: list[dict[str, Any]],
+    user_id: int,
+    conn: sqlite3.Connection,
+) -> tuple[str, list[str], bool]:
+    """Une passe complète de la boucle d'outils sur `model`.
+
+    Renvoie (texte accumulé, réponses rapides, escalade demandée). Si une réponse contient
+    `escalate_to_sonnet`, on s'arrête AVANT d'exécuter le moindre outil de cette réponse (pas de
+    mutation) et on renvoie escalated=True : l'appelant rejouera sur le modèle fort.
+    """
     convo = _normalize_messages(messages)
     # On accumule le texte de TOUS les tours : le modèle écrit souvent son message destiné à
     # l'utilisateur dans le même tour que l'appel d'outil, il ne faut donc pas le perdre.
@@ -156,9 +197,13 @@ def run_agent(
             model=model,
             max_tokens=2048,
             system=system,
-            tools=TOOLS,
+            tools=tools,
             messages=convo,
         )
+
+        # Escalade détectée : on abandonne cette passe sans exécuter d'outil (évite toute mutation).
+        if any(b.type == "tool_use" and b.name == "escalate_to_sonnet" for b in response.content):
+            return "", [], True
 
         iter_text = ""
         tool_results = []
@@ -172,7 +217,7 @@ def run_agent(
                     quick_replies = list((block.input or {}).get("options") or [])
                     result = "Choix proposés."
                 else:
-                    result = handle_tool(user["id"], block.name, block.input or {}, conn)
+                    result = handle_tool(user_id, block.name, block.input or {}, conn)
                 tool_results.append(
                     {"type": "tool_result", "tool_use_id": block.id, "content": result}
                 )
@@ -186,7 +231,7 @@ def run_agent(
         convo.append({"role": "assistant", "content": _serialize_blocks(response.content)})
         convo.append({"role": "user", "content": tool_results})
 
-    return AgentReply("\n\n".join(text_parts).strip(), quick_replies)
+    return "\n\n".join(text_parts).strip(), quick_replies, False
 
 
 def _serialize_blocks(content: list[Any]) -> list[dict[str, Any]]:

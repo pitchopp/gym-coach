@@ -134,6 +134,23 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Outil de CONTRÔLE d'escalade : proposé uniquement lors de la passe « modèle rapide » et capté par
+# run_agent (pas dans TOOLS ni handle_tool). Quand le modèle rapide le réclame, run_agent rejoue le
+# tour sur le modèle fort.
+ESCALATE_TOOL = {
+    "name": "escalate_to_sonnet",
+    "description": (
+        "Appelle-moi EN PREMIER et SEUL (avant tout texte ou autre outil) si la demande exige un vrai "
+        "raisonnement : concevoir/ajuster un programme, expliquer une technique en profondeur, "
+        "planifier, arbitrer un cas complexe. Un modèle plus puissant reprendra alors le tour. "
+        "Pour les messages simples (accusé de réception, log de séance, petite question), n'appelle pas."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {"reason": {"type": "string"}},
+    },
+}
+
 
 def handle_tool(
     user_id: int, name: str, payload: dict[str, Any], conn: sqlite3.Connection
