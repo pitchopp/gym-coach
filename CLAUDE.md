@@ -92,6 +92,12 @@ Le token d'accès (~8 h) est rafraîchi automatiquement et persisté sur `/data`
 tourne à chaque rafraîchissement). Un cooldown après échec évite la rafale de 429. Pour rétablir le
 bot quand l'auth casse, voir la mémoire projet (« Récupération token OAuth »).
 
+**Déploiement (Dokploy)** : il n'y a **pas** de `ANTHROPIC_API_KEY`. Fournir `CLAUDE_OAUTH_JSON`
+(contenu JSON du Keychain « Claude Code-credentials ») comme variable d'environnement — il sert au
+**seed initial** des creds si le fichier `OAUTH_CREDS_PATH` (`/data/claude_oauth.json`) est absent.
+Le fichier vivant sur le volume `/data` faisant foi ensuite, `CLAUDE_OAUTH_JSON` n'est relu qu'au
+premier démarrage sur un volume vierge.
+
 ## Conventions
 
 - Migrations : fichiers `migrations/NNN_*.sql` appliqués une seule fois, dans l'ordre, idempotents
