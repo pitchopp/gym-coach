@@ -27,6 +27,13 @@ SERVER_ERROR_REPLY = (
     "Renvoie-moi ton message dans un instant, ça devrait repartir."
 )
 
+# Délimiteur (inséré par le modèle) qui sépare le texte en plusieurs bulles envoyées d'affilée.
+# Token volontairement absent du markdown/français naturel pour éviter tout sur-découpage.
+_BUBBLE_DELIMITER = "[[NEXT]]"
+_MAX_BUBBLES = 4
+# ReplyKeyboardRemove : retire un éventuel clavier restant quand un message n'a pas de boutons.
+_REMOVE_KEYBOARD = {"remove_keyboard": True}
+
 
 async def notify_failure(chat_id: int) -> None:
     """Prévient l'utilisateur d'un incident, sans jamais lever (best-effort)."""
@@ -74,6 +81,37 @@ def _maybe_summarize(conn: sqlite3.Connection, user_id: int) -> None:
         repository.update_summary(user_id, new_summary, new_through, conn=conn)
 
 
+def _split_bubbles(text: str) -> list[str]:
+    """Découpe le texte en bulles sur les lignes contenant uniquement `[[NEXT]]`.
+
+    Strip + drop des vides ; plafonné à `_MAX_BUBBLES` (le surplus est fusionné dans la dernière
+    bulle pour ne rien perdre). Retourne `[]` si le texte est vide.
+    """
+    bubbles = [seg.strip() for seg in (text or "").split(_BUBBLE_DELIMITER) if seg.strip()]
+    if len(bubbles) > _MAX_BUBBLES:
+        head = bubbles[: _MAX_BUBBLES - 1]
+        tail = "\n\n".join(bubbles[_MAX_BUBBLES - 1 :])
+        bubbles = head + [tail]
+    return bubbles
+
+
+async def _deliver(
+    chat_id: int, user_id: int, reply: agent.AgentReply, conn: sqlite3.Connection
+) -> None:
+    """Persiste la réponse (une fois) et l'envoie en une ou plusieurs bulles.
+
+    Le clavier de boutons (ou un ReplyKeyboardRemove pour éviter un clavier fantôme) est attaché à la
+    DERNIÈRE bulle uniquement. L'envoi est best-effort : on persiste le texte complet avant d'envoyer,
+    pour que l'historique reste cohérent même si une bulle saute.
+    """
+    bubbles = _split_bubbles(reply.text) or ["C'est noté 👍"]
+    repository.add_message(user_id, "assistant", "\n\n".join(bubbles), conn=conn)
+    last = len(bubbles) - 1
+    markup = telegram.reply_keyboard(reply.quick_replies) if reply.quick_replies else _REMOVE_KEYBOARD
+    for i, bubble in enumerate(bubbles):
+        await telegram.send_message(chat_id, bubble, reply_markup=markup if i == last else None)
+
+
 async def handle_incoming(chat_id: int, text: str) -> str:
     """Traite un message entrant : persiste, fait répondre le coach, envoie la réponse."""
     settings = get_settings()
@@ -93,13 +131,10 @@ async def handle_incoming(chat_id: int, text: str) -> str:
             logger.exception("run_agent a échoué pour chat_id=%s", chat_id)
             await notify_failure(chat_id)
             return SERVER_ERROR_REPLY
-        if not reply:
-            reply = "C'est noté 👍"
-        repository.add_message(user["id"], "assistant", reply, conn=conn)
+        await _deliver(chat_id, user["id"], reply, conn)
         await asyncio.to_thread(_maybe_summarize, conn, user["id"])
 
-    await telegram.send_message(chat_id, reply)
-    return reply
+    return reply.text
 
 
 async def handle_voice(chat_id: int, file_id: str) -> None:
@@ -129,20 +164,19 @@ async def handle_proactive(user: sqlite3.Row, checkin: sqlite3.Row) -> None:
             "[CONSIGNE INTERNE — ne pas mentionner ce message] "
             f"C'est l'heure de prendre des nouvelles : l'utilisateur avait prévu « {activity} » "
             f"le {checkin['due_date']}. Écris-lui un message court et naturel pour savoir s'il a "
-            "pu faire sa séance. N'enregistre rien maintenant (attends sa réponse)."
+            "pu faire sa séance. Propose-lui des réponses rapides (fait / pas encore / je reporte) "
+            "via suggest_replies. N'enregistre rien maintenant (attends sa réponse)."
         ),
     }
     await telegram.send_chat_action(chat_id, "typing")
     async with _locks[chat_id]:
         fresh = repository.get_user(user["id"], conn=conn)
         messages = _history(conn, fresh) + [directive]
-        text = await asyncio.to_thread(agent.run_agent, conn, fresh, messages)
-        if not text:
-            text = f"Salut ! Tu as réussi à caser {activity} ?"
-        repository.add_message(user["id"], "assistant", text, conn=conn)
+        reply = await asyncio.to_thread(agent.run_agent, conn, fresh, messages)
+        if not reply.text:
+            reply.text = f"Salut ! Tu as réussi à caser {activity} ?"
+        await _deliver(chat_id, user["id"], reply, conn)
         repository.mark_checkin_asked(checkin["id"], conn=conn)
-
-    await telegram.send_message(chat_id, text)
 
 
 async def handle_onboarding_nudge(user: sqlite3.Row) -> None:
@@ -163,10 +197,8 @@ async def handle_onboarding_nudge(user: sqlite3.Row) -> None:
     async with _locks[chat_id]:
         fresh = repository.get_user(user["id"], conn=conn)
         messages = _history(conn, fresh) + [directive]
-        text = await asyncio.to_thread(agent.run_agent, conn, fresh, messages)
-        if not text:
-            text = "Hey ! On reprend quand tu veux pour finir de caler ton programme 💪"
-        repository.add_message(user["id"], "assistant", text, conn=conn)
+        reply = await asyncio.to_thread(agent.run_agent, conn, fresh, messages)
+        if not reply.text:
+            reply.text = "Hey ! On reprend quand tu veux pour finir de caler ton programme 💪"
+        await _deliver(chat_id, user["id"], reply, conn)
         repository.increment_onboarding_nudge(user["id"], conn=conn)
-
-    await telegram.send_message(chat_id, text)

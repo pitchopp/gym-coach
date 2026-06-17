@@ -25,15 +25,33 @@ def _url(method: str) -> str:
     return _API_BASE.format(token=get_settings().telegram_bot_token, method=method)
 
 
-async def send_message(chat_id: int, text: str) -> None:
+async def send_message(
+    chat_id: int, text: str, reply_markup: dict[str, Any] | None = None
+) -> None:
+    payload: dict[str, Any] = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
     async with httpx.AsyncClient(timeout=20) as client:
-        resp = await client.post(
-            _url("sendMessage"),
-            json={"chat_id": chat_id, "text": text, "parse_mode": "Markdown"},
-        )
+        resp = await client.post(_url("sendMessage"), json=payload)
         if resp.status_code >= 400:
-            # Markdown invalide ? On retente en texte brut pour ne pas perdre le message.
-            await client.post(_url("sendMessage"), json={"chat_id": chat_id, "text": text})
+            # Markdown invalide ? On retente en texte brut (en gardant les boutons) pour ne pas
+            # perdre le message ni le clavier.
+            fallback = {"chat_id": chat_id, "text": text}
+            if reply_markup is not None:
+                fallback["reply_markup"] = reply_markup
+            await client.post(_url("sendMessage"), json=fallback)
+
+
+def reply_keyboard(options: list[str]) -> dict[str, Any]:
+    """Construit un reply keyboard : boutons-raccourcis qui renvoient leur texte comme un message
+    normal. La zone de saisie libre reste toujours disponible (1 à 2 boutons par rangée)."""
+    rows = [options[i : i + 2] for i in range(0, len(options), 2)]
+    return {
+        "keyboard": rows,
+        "resize_keyboard": True,
+        "one_time_keyboard": True,
+        "is_persistent": False,
+    }
 
 
 async def send_chat_action(chat_id: int, action: str = "typing") -> None:

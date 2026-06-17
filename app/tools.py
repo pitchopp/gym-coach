@@ -115,6 +115,23 @@ TOOLS: list[dict[str, Any]] = [
         "description": "Liste tous les faits mémorisés sur l'utilisateur.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        # Outil de PRÉSENTATION (pas de mutation DB) : capté directement par run_agent pour attacher
+        # un reply keyboard au message. Il n'a donc volontairement pas de handler dans handle_tool.
+        "name": "suggest_replies",
+        "description": (
+            "Propose 2 à 4 réponses rapides en boutons Telegram quand ta question a des réponses "
+            "probables ; l'utilisateur garde toujours la saisie libre. À appeler dans le même "
+            "message que la question. N'utilise pas pour une question ouverte."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "options": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["options"],
+        },
+    },
 ]
 
 

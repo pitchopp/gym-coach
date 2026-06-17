@@ -7,6 +7,7 @@ demandés en boucle jusqu'à `end_turn`, et renvoie le texte final destiné à l
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass, field
 from typing import Any
 
 from anthropic import Anthropic
@@ -16,6 +17,15 @@ from app.config import get_settings
 from app.tools import TOOLS, handle_tool
 
 MAX_TOOL_ITERATIONS = 8
+
+
+@dataclass
+class AgentReply:
+    """Réponse d'un tour : le texte (potentiellement multi-bulles via `[[NEXT]]`) et les éventuelles
+    réponses rapides à proposer en boutons. Le découpage et l'envoi sont la responsabilité de coach."""
+
+    text: str
+    quick_replies: list[str] = field(default_factory=list)
 
 _PERSONA = """Tu es un coach sportif personnel sur Telegram. Tu remplaces un vrai coach : expert, \
 bienveillant, motivant et concret. Tu tutoies par défaut (sauf préférence contraire).
@@ -40,7 +50,14 @@ Proactivité : tu relances l'utilisateur au bon moment pour savoir s'il a fait s
 spammes jamais. Quand il répond à une relance, enregistre l'issue via log_session (done / skipped / \
 rescheduled avec une date). S'il dit qu'il ira un autre jour, utilise rescheduled.
 
-Style : messages courts, naturels, ton de coach. Pas de listes interminables sauf pour un programme."""
+Style & format des messages :
+- Messages COURTS par défaut, naturels, ton de coach. Si beaucoup d'infos, condense — pas de pavés.
+- Une question à la fois. Tu peux enchaîner plusieurs courtes bulles dans le même tour en les séparant \
+par une ligne contenant uniquement [[NEXT]] (réservé aux courtes bulles de chat — JAMAIS dans un programme).
+- Quand ta question a des réponses probables, propose 2 à 4 choix courts via l'outil suggest_replies \
+(la saisie libre reste toujours dispo). Appelle-le DANS LE MÊME message que la question. Ne l'utilise pas \
+pour une question ouverte ni pour afficher un programme.
+- Pas de listes interminables sauf pour un programme."""
 
 
 def _client() -> Anthropic:
@@ -92,8 +109,8 @@ def run_agent(
     *,
     client: Anthropic | None = None,
     model: str | None = None,
-) -> str:
-    """Exécute un tour complet (avec boucle d'outils) et renvoie le texte final."""
+) -> AgentReply:
+    """Exécute un tour complet (avec boucle d'outils) et renvoie le texte final + choix éventuels."""
     client = client or _client()
     model = model or get_settings().model
     # 3 blocs : identité Claude Code (requise OAuth) + persona, tous deux STATIQUES -> mis en cache
@@ -109,6 +126,7 @@ def run_agent(
     # On accumule le texte de TOUS les tours : le modèle écrit souvent son message destiné à
     # l'utilisateur dans le même tour que l'appel d'outil, il ne faut donc pas le perdre.
     text_parts: list[str] = []
+    quick_replies: list[str] = []  # réponses rapides : le dernier suggest_replies gagne
 
     for _ in range(MAX_TOOL_ITERATIONS):
         response = client.messages.create(
@@ -125,7 +143,13 @@ def run_agent(
             if block.type == "text":
                 iter_text += block.text
             elif block.type == "tool_use":
-                result = handle_tool(user["id"], block.name, block.input or {}, conn)
+                if block.name == "suggest_replies":
+                    # Outil de présentation : capté ici (pas dans handle_tool) car son effet est le
+                    # clavier de boutons, pas une mutation DB.
+                    quick_replies = list((block.input or {}).get("options") or [])
+                    result = "Choix proposés."
+                else:
+                    result = handle_tool(user["id"], block.name, block.input or {}, conn)
                 tool_results.append(
                     {"type": "tool_result", "tool_use_id": block.id, "content": result}
                 )
@@ -139,7 +163,7 @@ def run_agent(
         convo.append({"role": "assistant", "content": _serialize_blocks(response.content)})
         convo.append({"role": "user", "content": tool_results})
 
-    return "\n\n".join(text_parts).strip()
+    return AgentReply("\n\n".join(text_parts).strip(), quick_replies)
 
 
 def _serialize_blocks(content: list[Any]) -> list[dict[str, Any]]:
