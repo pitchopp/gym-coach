@@ -99,6 +99,17 @@ def test_run_agent_plain_text_no_tool(conn):
     assert len(client.messages.calls) == 1
 
 
+def test_now_str_inclut_iso_et_gere_fuseau_invalide():
+    import re
+
+    s = agent._now_str("Europe/Paris")
+    assert "Europe/Paris" in s
+    assert re.search(r"ISO \d{4}-\d{2}-\d{2}", s)  # date ISO exploitable par le modèle
+    # Un fuseau invalide ne doit pas faire planter le snapshot (repli UTC).
+    fallback = agent._now_str("Pas/Un/Fuseau")
+    assert re.search(r"ISO \d{4}-\d{2}-\d{2}", fallback)
+
+
 def test_run_agent_captures_suggest_replies(conn):
     user = repository.get_or_create_user(9, conn=conn)
     user = repository.get_user(user["id"], conn=conn)

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from anthropic import Anthropic
 
@@ -57,11 +59,32 @@ par une ligne contenant uniquement [[NEXT]] (réservé aux courtes bulles de cha
 - Quand ta question a des réponses probables, propose 2 à 4 choix courts via l'outil suggest_replies \
 (la saisie libre reste toujours dispo). Appelle-le DANS LE MÊME message que la question. Ne l'utilise pas \
 pour une question ouverte ni pour afficher un programme.
-- Pas de listes interminables sauf pour un programme."""
+- Pas de listes interminables sauf pour un programme.
+- Tu connais déjà la date et l'heure (champ « Maintenant » de l'état ci-dessous, dans le fuseau de \
+l'utilisateur) : ne demande JAMAIS quel jour ou quelle heure il est, déduis-le toi-même."""
 
 
 def _client() -> Anthropic:
     return auth.build_client()
+
+
+_JOURS = ["lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche"]
+_MOIS = [
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+]
+
+
+def _now_str(timezone: str) -> str:
+    """Date et heure actuelles dans le fuseau de l'utilisateur, lisibles + ISO pour le calcul de dates."""
+    try:
+        now = datetime.now(ZoneInfo(timezone))
+    except Exception:
+        now = datetime.now(ZoneInfo("UTC"))
+    return (
+        f"{_JOURS[now.weekday()]} {now.day} {_MOIS[now.month - 1]} {now.year}, "
+        f"{now:%Hh%M} (ISO {now:%Y-%m-%d}, {timezone})"
+    )
 
 
 def build_state_snapshot(conn: sqlite3.Connection, user: sqlite3.Row) -> str:
@@ -88,6 +111,7 @@ def build_state_snapshot(conn: sqlite3.Connection, user: sqlite3.Row) -> str:
 
     return (
         "\n\n=== État actuel de l'utilisateur ===\n"
+        f"Maintenant: {_now_str(user['timezone'])}\n"
         f"Nom: {user['name'] or 'inconnu'}\n"
         f"Fuseau: {user['timezone']}\n"
         f"Fréquence: {user['training_frequency'] or 'inconnue'}\n"
